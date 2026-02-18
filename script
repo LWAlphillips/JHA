@@ -1,0 +1,417 @@
+// === GLOBAL CONFIGURATION ===
+let TEMPLATE_DOC_ID = '1BQEX8od08nylM9RXEv2FeKQhWqIiRKeCXWONEU91XXI';
+let DOCS_FOLDER_ID  = '1LzPG-jxTQ-QG5mIKTVUhmaozXxEoFitc';
+let PDF_FOLDER_ID   = '1SV9ak7HeGQW_xO1h6DOcL3bfWBPjPkq6';
+let DOC_NAME_PREFIX = 'Safe Work Permit - ';
+let SEND_EMAIL      = true;
+let CC_EMAILS       = [];
+let EMAIL_SUBJECT   = 'New Safe Work Permit Generated';
+let EMAIL_BODY      = 'A new Safe Work Permit has been generated from the form submission and is attached as a PDF.\n\nPlease review, sign if required, and distribute to the crew.\n\nThank you.';
+
+// ────────────────────────────────────────────────
+// MAIN TRIGGER FUNCTION
+// ────────────────────────────────────────────────
+function onFormSubmit(e) {
+  if (!e || !e.source) {
+    Logger.log('Script run manually - no event object. Exiting.');
+    return;
+  }
+
+  const sheet = e.source.getActiveSheet();
+  const row = e.range.getRow();
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const values = e.values;
+
+  // Normalize headers to handle spacing variations
+  const dataMap = {};
+  headers.forEach((header, index) => {
+    let cleanKey = header.trim();
+    cleanKey = cleanKey.replace(/\s+/g, ' ').replace(/\s*\/\s*/g, ' / ');
+    dataMap[cleanKey] = (values[index] || '').toString().trim();
+  });
+
+  // Debug: Show exact headers for problem sections
+  Logger.log('=== DEBUG: Relevant sheet headers (exact from row 1) ===');
+  headers.forEach((h, idx) => {
+    if (h.toLowerCase().includes('chemical') || 
+        h.toLowerCase().includes('loto') || 
+        h.toLowerCase().includes('weather') || 
+        h.toLowerCase().includes('emergency') || 
+        h.toLowerCase().includes('hazard') || 
+        h.toLowerCase().includes('control')) {
+      Logger.log(`Column ${idx + 1}: "${h}"`);
+    }
+  });
+  Logger.log('=== END headers debug ===');
+
+  function formatHazardsControls(text) {
+    if (!text || typeof text !== 'string' || text.trim() === '') return '';
+
+    const items = [];
+    let current = '';
+    let parenLevel = 0;
+
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+      if (char === '(') parenLevel++;
+      if (char === ')') parenLevel = Math.max(0, parenLevel - 1);
+      if (char === ',' && parenLevel === 0) {
+        if (current.trim()) items.push(current.trim());
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    if (current.trim()) items.push(current.trim());
+
+    let cleanedItems = items.map(item => item.trim()).filter(item => item.length > 0);
+    if (cleanedItems.length === 0) return '';
+
+    if (cleanedItems.length === 1 && !cleanedItems[0].match(/^\d+\./)) {
+      return '1. ' + cleanedItems[0];
+    }
+
+    const lastItem = cleanedItems[cleanedItems.length - 1];
+    if (cleanedItems.length > 1 && !lastItem.match(/^\d+\./) && !lastItem.toLowerCase().includes('other')) {
+      cleanedItems[cleanedItems.length - 1] = 'Other: ' + lastItem;
+    }
+
+    return cleanedItems.map((item, index) => `${index + 1}. ${item}`).join('\n\n');
+  }
+
+  const isHeights = (dataMap['Include Working at Heights (ladders, scaffolds, roofs, catwalks)?'] || '').toLowerCase() === 'yes';
+  const heightsTaskName = isHeights ? 'Working at Heights (ladders, scaffolds, roofs)' : '';
+  const heightsRAC = isHeights ? ((dataMap['RAC for Working at Heights (ladders, scaffolds, roofs)'] || '').charAt(0).toUpperCase() || '') : '';
+  const heightsHaz = isHeights ? formatHazardsControls(dataMap['Working at Heights Associated Hazards']) : '';
+  const heightsCtrl = isHeights ? formatHazardsControls(dataMap['Working at Heights Controls']) : '';
+
+  const isConfined = (dataMap['Include Confined Space?'] || '').toLowerCase() === 'yes';
+  const confinedTaskName = isConfined ? 'Confined Space' : '';
+  const confinedRAC = isConfined ? ((dataMap['RAC for Confined Space Entry'] || '').charAt(0).toUpperCase() || '') : '';
+  const confinedHaz = isConfined ? formatHazardsControls(dataMap['Confined Space Hazards']) : '';
+  const confinedCtrl = isConfined ? formatHazardsControls(dataMap['Confined Space Controls']) : '';
+
+  const isElectrical = (dataMap['Include Electrical Work (Live or De-energized)?'] || '').toLowerCase() === 'yes';
+  const electricalTaskName = isElectrical ? 'Electrical Work (Live or De-energized)' : '';
+  const electricalRAC = isElectrical ? ((dataMap['RAC for Electrical Work (Live or De-energized)'] || '').charAt(0).toUpperCase() || '') : '';
+  const electricalHaz = isElectrical ? formatHazardsControls(dataMap['Electrical Hazards']) : '';
+  const electricalCtrl = isElectrical ? formatHazardsControls(dataMap['Electrical Controls']) : '';
+
+  const isExcavation = (dataMap['Include Excavation / Trenching >4 ft?'] || '').toLowerCase() === 'yes';
+  const excavationTaskName = isExcavation ? 'Excavation / Trenching >4 ft' : '';
+  const excavationRAC = isExcavation ? ((dataMap['RAC for Excavation / Trenching >4 ft'] || '').charAt(0).toUpperCase() || '') : '';
+  const excavationHaz = isExcavation ? formatHazardsControls(dataMap['Excavation / Trenching Hazards']) : '';
+  const excavationCtrl = isExcavation ? formatHazardsControls(dataMap['Excavation / Trenching Controls']) : '';
+
+  const isHotWork = (dataMap['Include Hot Work (welding, grinding, cutting)?'] || '').toLowerCase() === 'yes';
+  const hotWorkTaskName = isHotWork ? 'Hot Work (welding, grinding, cutting)' : '';
+  const hotWorkRAC = isHotWork ? ((dataMap['RAC for Hot Work (welding, grinding, cutting)'] || '').charAt(0).toUpperCase() || '') : '';
+  const hotWorkHaz = isHotWork ? formatHazardsControls(dataMap['Hot Work Hazards']) : '';
+  const hotWorkCtrl = isHotWork ? formatHazardsControls(dataMap['Hot Work Controls']) : '';
+
+  const isCrane = (dataMap['Include Crane / Rigging / Heavy Lifts?'] || '').toLowerCase() === 'yes';
+  const craneTaskName = isCrane ? 'Crane / Rigging / Heavy Lifts' : '';
+  const craneRAC = isCrane ? ((dataMap['RAC for Crane / Rigging / Heavy Lifts'] || '').charAt(0).toUpperCase() || '') : '';
+  const craneHaz = isCrane ? formatHazardsControls(dataMap['Crane / Rigging / Heavy Lifts Hazards']) : '';
+  const craneCtrl = isCrane ? formatHazardsControls(dataMap['Crane / Rigging / Heavy Lifts Controls']) : '';
+
+  const isLOTO = (dataMap['Include Lockout/Tagout (LOTO)'] || '').toLowerCase() === 'yes';  // FIXED: removed trailing "?"
+  const lotoTaskName = isLOTO ? 'Lockout/Tagout (LOTO)' : '';
+  const lotoRAC = isLOTO ? ((dataMap['RAC for Lockout/Tagout (LOTO)'] || '').charAt(0).toUpperCase() || '') : '';
+  const lotoHaz = isLOTO ? formatHazardsControls(dataMap['LOTO Hazards']) : '';
+  const lotoCtrl = isLOTO ? formatHazardsControls(dataMap['LOTO Controls']) : '';
+
+  // Debug for LOTO
+  Logger.log('LOTO isLOTO: ' + isLOTO);
+  Logger.log('LOTO include value: ' + (dataMap['Include Lockout/Tagout (LOTO)'] || 'MISSING'));
+  Logger.log('LOTO raw hazards length: ' + (dataMap['LOTO Hazards'] || 'MISSING').length);
+  Logger.log('Formatted lotoHaz length: ' + lotoHaz.length);
+  Logger.log('Formatted lotoCtrl length: ' + lotoCtrl.length);
+
+  const isChemical = (dataMap['Include Chemical Handling / Transfer?'] || '').toLowerCase() === 'yes';
+  const chemicalTaskName = isChemical ? 'Chemical Handling / Transfer' : '';
+  const chemicalRAC = isChemical ? ((dataMap['RAC for Chemical Handling / Transfer'] || '').charAt(0).toUpperCase() || '') : '';
+  const chemicalHaz = isChemical ? formatHazardsControls(dataMap['Chemical Handling / Transfer Hazards']) : '';
+  const chemicalCtrl = isChemical ? formatHazardsControls(dataMap['Chemical Handling / Transfer Controls']) : '';
+
+  const isMobile = (dataMap['Include Mobile Equipment Operation (forklift, bobcat, telehandler)?'] || '').toLowerCase() === 'yes';
+  const mobileTaskName = isMobile ? 'Mobile Equipment Operation (forklift, bobcat, telehandler)' : '';
+  const mobileRAC = isMobile ? ((dataMap['RAC for Mobile Equipment Operation (forklift, bobcat, telehandler)'] || '').charAt(0).toUpperCase() || '') : '';
+  const mobileHaz = isMobile ? formatHazardsControls(dataMap['Mobile Equipment Operation (forklift, bobcat, telehandler) Hazards']) : '';
+  const mobileCtrl = isMobile ? formatHazardsControls(dataMap['Mobile Equipment Operation (forklift, bobcat, telehandler) Controls']) : '';
+
+  const isManual = (dataMap['Include Manual Material Handling / Heavy Lifting?'] || '').toLowerCase() === 'yes';
+  const manualTaskName = isManual ? 'Manual Material Handling / Heavy Lifting' : '';
+  const manualRAC = isManual ? ((dataMap['RAC for Manual Material Handling / Heavy Lifting'] || '').charAt(0).toUpperCase() || '') : '';
+  const manualHaz = isManual ? formatHazardsControls(dataMap['Manual Material Handling / Heavy Lifting Hazards']) : '';
+  const manualCtrl = isManual ? formatHazardsControls(dataMap['Manual Material Handling / Heavy Lifting Controls']) : '';
+
+  const isSFO = (dataMap['Include SFO Site Specific Work?'] || '').toLowerCase() === 'yes';
+  const sfoTaskName = isSFO ? 'SFO Site Specific Work' : '';
+  const sfoRAC = isSFO ? ((dataMap['RAC for SFO Site Specific Work'] || '').charAt(0).toUpperCase() || '') : '';
+  const sfoHaz = isSFO ? formatHazardsControls(dataMap['SFO Site Specific Work Hazards']) : '';
+  const sfoCtrl = isSFO ? formatHazardsControls(dataMap['SFO Site Specific Work Controls']) : '';
+
+  const isEmergency = (dataMap['Include Emergency Response?'] || '').toLowerCase() === 'yes';
+  const emergencyTaskName = isEmergency ? 'Emergency Response' : '';
+  const emergencyRAC = isEmergency ? ((dataMap['RAC for Emergency Response'] || '').charAt(0).toUpperCase() || '') : '';
+  const emergencyHaz = isEmergency ? formatHazardsControls(dataMap['Emergency Response Hazards']) : '';
+  const emergencyCtrl = isEmergency ? formatHazardsControls(dataMap['Emergency Response Controls']) : '';
+
+  const isWeather = (dataMap['Weather / Environmental Controls?'] || '').toLowerCase() === 'yes';
+  const weatherTaskName = isWeather ? 'Weather Considerations' : '';
+  const weatherRAC = isWeather ? ((dataMap['RAC for Weather / Environmental Controls'] || '').charAt(0).toUpperCase() || '') : '';
+  const weatherHaz = isWeather ? formatHazardsControls(dataMap['Weather / Environmental Hazards']) : '';
+  const weatherCtrl = isWeather ? formatHazardsControls(dataMap['Weather / Environmental Controls']) : '';
+
+  const isConditions = (dataMap['Include Conditions Change?'] || '').toLowerCase() === 'yes';
+  const conditionsTaskName = isConditions ? 'Conditions Change' : '';
+  const conditionsRAC = isConditions ? ((dataMap['RAC for Conditions Change'] || '').charAt(0).toUpperCase() || '') : '';
+  const conditionsHaz = isConditions ? formatHazardsControls(dataMap['Conditions Change Hazards']) : '';
+  const conditionsCtrl = isConditions ? formatHazardsControls(dataMap['Conditions Change Controls']) : '';
+
+  // ────────────────────────────────────────────────
+  // PLACEHOLDERS
+  // ────────────────────────────────────────────────
+  const placeholders = {
+    '{{Timestamp}}': dataMap['Timestamp'] || '',
+    '{{Date Prepared}}': dataMap['Date Prepared'] || '',
+    '{{Prepared By}}': dataMap['Prepared By'] || '',
+    '{{LWA Job #}}': dataMap['LWA Job #'] || '',
+    '{{Project Name}}': dataMap['Project Name'] || '',
+    '{{General Contractor}}': dataMap['General Contractor'] || '',
+    '{{Subcontractor}}': dataMap['Subcontractor'] || '',
+    '{{Location of Work}}': dataMap['Location(s) of Work:'] || '',
+    '{{Additional Notes or Comments}}': dataMap['Additional Notes or Comments'] || '',
+    '{{Acknowledgment}}': dataMap['Acknowledgment'] || '',
+
+    '{{HEIGHTS_TASK}}': heightsTaskName,
+    '{{HTRC}}': heightsRAC,
+    '{{Working at Heights Associated Hazards}}': heightsHaz,
+    '{{Working at Heights Controls}}': heightsCtrl,
+
+    '{{CONFINED_TASK}}': confinedTaskName,
+    '{{CSRC}}': confinedRAC,
+    '{{Confined Space Hazards}}': confinedHaz,
+    '{{Confined Space Controls}}': confinedCtrl,
+
+    '{{ELECTRICAL_TASK}}': electricalTaskName,
+    '{{ELRC}}': electricalRAC,
+    '{{Electrical Hazards}}': electricalHaz,
+    '{{Electrical Controls}}': electricalCtrl,
+
+    '{{EXCAV_TASK}}': excavationTaskName,
+    '{{EXRC}}': excavationRAC,
+    '{{Excavation / Trenching Hazards}}': excavationHaz,
+    '{{Excavation / Trenching Controls}}': excavationCtrl,
+
+    '{{HOTWORK_TASK}}': hotWorkTaskName,
+    '{{HWRC}}': hotWorkRAC,
+    '{{Hot Work Hazards}}': hotWorkHaz,
+    '{{Hot Work Controls}}': hotWorkCtrl,
+
+    '{{CRANE_TASK}}': craneTaskName,
+    '{{CRRC}}': craneRAC,
+    '{{Crane / Rigging / Heavy Lifts Hazards}}': craneHaz,
+    '{{Crane / Rigging / Heavy Lifts Controls}}': craneCtrl,
+
+    '{{LOTO_TASK}}': lotoTaskName,
+    '{{LTRC}}': lotoRAC,
+    '{{LOTO Hazards}}': lotoHaz,
+    '{{LOTO Controls}}': lotoCtrl,
+
+    '{{CHEM_TASK}}': chemicalTaskName,
+    '{{CHRC}}': chemicalRAC,
+    '{{Chemical Handling / Transfer Hazards}}': chemicalHaz,
+    '{{Chemical Handling / Transfer Controls}}': chemicalCtrl,
+
+    '{{MOBILE_TASK}}': mobileTaskName,
+    '{{MERC}}': mobileRAC,
+    '{{Mobile Equipment Operation (forklift, bobcat, telehandler) Hazards}}': mobileHaz,
+    '{{Mobile Equipment Operation (forklift, bobcat, telehandler) Controls}}': mobileCtrl,
+
+    '{{MANUAL_TASK}}': manualTaskName,
+    '{{MMRC}}': manualRAC,
+    '{{Manual Material Handling / Heavy Lifting Hazards}}': manualHaz,
+    '{{Manual Material Handling / Heavy Lifting Controls}}': manualCtrl,
+
+    '{{SFO_TASK}}': sfoTaskName,
+    '{{SFRC}}': sfoRAC,
+    '{{SFO Site Specific Work Hazards}}': sfoHaz,
+    '{{SFO Site Specific Work Controls}}': sfoCtrl,
+
+    '{{EMERGENCY_TASK}}': emergencyTaskName,
+    '{{EMRC}}': emergencyRAC,
+    '{{Emergency Response Hazards}}': emergencyHaz,
+    '{{Emergency Response Controls}}': emergencyCtrl,
+
+    '{{WEATHER_TASK}}': weatherTaskName,
+    '{{WERC}}': weatherRAC,
+    '{{Weather / Environmental Hazards}}': weatherHaz,
+    '{{Weather / Environmental Controls}}': weatherCtrl,
+
+    '{{CONDITIONS_TASK}}': conditionsTaskName,
+    '{{CCRC}}': conditionsRAC,
+    '{{Conditions Change Hazards}}': conditionsHaz,
+    '{{Conditions Change Controls}}': conditionsCtrl
+  };
+
+  // Debug for remaining sections
+  Logger.log('=== Section content check ===');
+  ['LOTO Hazards', 'LOTO Controls', 'Weather / Environmental Hazards', 'Weather / Environmental Controls', 'Emergency Response Hazards', 'Emergency Response Controls'].forEach(key => {
+    const val = dataMap[key] || 'MISSING';
+    Logger.log(`${key}: raw length ${val.length}, preview: ${val.substring(0,100)}...`);
+  });
+
+  // File names
+  const projectName = dataMap['Project Name'] || 'Untitled Project';
+  const preparedBy = dataMap['Prepared By'] || 'Unknown';
+  const docName = `${DOC_NAME_PREFIX}${projectName} - ${preparedBy}`;
+  const pdfName = `${docName}.pdf`;
+
+  const docsFolder = DriveApp.getFolderById(DOCS_FOLDER_ID);
+  const pdfFolder = DriveApp.getFolderById(PDF_FOLDER_ID);
+
+  const templateFile = DriveApp.getFileById(TEMPLATE_DOC_ID);
+  const newDocFile = templateFile.makeCopy(docName, docsFolder);
+
+  const doc = DocumentApp.openById(newDocFile.getId());
+  const body = doc.getBody();
+
+  Object.keys(placeholders).forEach(placeholder => {
+    const value = placeholders[placeholder] || '';
+    const escaped = placeholder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    body.replaceText(escaped, value);
+  });
+
+  const tables = body.getTables();
+  tables.forEach(table => {
+    for (let r = 0; r < table.getNumRows(); r++) {
+      const row = table.getRow(r);
+      for (let c = 0; c < row.getNumCells(); c++) {
+        const cell = row.getCell(c);
+        const textElement = cell.editAsText();
+        let text = textElement.getText();
+
+        Object.keys(placeholders).forEach(placeholder => {
+          const value = placeholders[placeholder] || '';
+          const regex = new RegExp(placeholder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+          text = text.replace(regex, value);
+        });
+
+        if (text !== textElement.getText()) {
+          textElement.setText(text);
+        }
+      }
+    }
+  });
+
+  doc.saveAndClose();
+
+  Utilities.sleep(5000);
+
+  const pdfBlob = newDocFile.getAs('application/pdf').setName(pdfName);
+  const pdfFile = pdfFolder.createFile(pdfBlob);
+
+  let linkColumn = headers.indexOf('Permit Files') + 1;
+  if (linkColumn === 0) {
+    linkColumn = sheet.getLastColumn() + 1;
+    sheet.getRange(1, linkColumn).setValue('Permit Files');
+  }
+  sheet.getRange(row, linkColumn).setValue(
+    `Google Doc: ${newDocFile.getUrl()}\n` +
+    `PDF: ${pdfFile.getUrl()}`
+  );
+
+  if (SEND_EMAIL) {
+    let recipients = [];
+    const formEmail = (dataMap['Email:'] || '').trim();
+    if (formEmail && formEmail.includes('@')) recipients.push(formEmail);
+    recipients.push('info@smith4safety.com');
+    recipients = [...new Set(recipients)];
+
+    const cleanCc = CC_EMAILS
+      .map(e => e.trim())
+      .filter(e => e.length > 0 && e.includes('@'));
+
+    try {
+      GmailApp.sendEmail(
+        recipients.join(', '),
+        `${EMAIL_SUBJECT} — ${projectName}`,
+        `${EMAIL_BODY}\n\nProject: ${projectName}\nPrepared By: ${preparedBy}\nDate Prepared: ${dataMap['Date Prepared'] || 'N/A'}`,
+        {
+          cc: cleanCc.length > 0 ? cleanCc.join(', ') : undefined,
+          attachments: [pdfBlob],
+          name: 'Safe Work Permit System'
+        }
+      );
+      Logger.log('Email successfully sent to: ' + recipients.join(', '));
+    } catch (error) {
+      Logger.log('Email failed: ' + error.toString());
+    }
+  }
+}
+
+// ────────────────────────────────────────────────
+// TEST FUNCTION
+// ────────────────────────────────────────────────
+function testGeneratePermit(chemicalEnabled = true) {
+  const mockValues = [
+    new Date().toISOString(), // 1 Timestamp
+    "Lloyd W. Aubry Co., INC", // 2 General Contractor
+    "N/A", // 3 Subcontractor
+    "General JHA", // 4 Project Name
+    "LWA JHA2", // 5 LWA Job #
+    "2/18/2026", // 6 Date Prepared
+    "Larry Phillips", // 7 Prepared By
+    "lphillips@lloydaubry.com", // 8 Email:
+    "San Francisco Airport – Roof Area", // 9 Location(s) of Work:
+    "Yes", // 10 Include Working at Heights (ladders, scaffolds, roofs, catwalks)?
+    "H=High Risk", // 11 RAC for Working at Heights (ladders, scaffolds, roofs)
+    "Ladder/scaffold collapse or slip, Falling objects/dropped tools, Unstable or uneven walking/working surface, Overreaching or loss of balance, Adverse weather (wind, rain, ice), Contact with overhead power lines, Improper ladder angle or setup, Structural failure of roof or scaffold, Fatigue or impaired worker (dehydration, heat stress), Inadequate edge protection or openings, Anchor failure under load (e.g., unrated points collapsing during a fall), Improper tie-off selection (e.g., non-engineered points like pipes bending or breaking), Lack of approval leading to misuse (e.g., workers tying off to unstable structures), Unprotected leading edges causing falls (e.g., during roof installation), Fixed position instability (e.g., scaffold shifts in wind during prolonged tasks), Worker overreach leading to loss of balance, Suspension trauma post-fall (e.g., blood pooling in legs after 15 minutes), Delayed rescue due to inaccessible locations (e.g., remote roof areas), Equipment failure during rescue (e.g., faulty descent devices), Loose tools falling (e.g., striking below workers), Debris falls injuring pedestrians", // 12 Working at Heights Associated Hazards
+    "100% tie-off with personal fall arrest system (PFAS) above 6 ft, Pre-use inspection of ladders/scaffolds, Guardrails, toeboards, and midrails on scaffolds, 10-ft exclusion zone below work area, Tool lanyards/tethering for all hand tools, Maintain 3 points of contact on ladders, Proper ladder setup (4:1 angle, extend 3 ft above landing), Fall protection plan and permit for heights >20 ft, Weather monitoring and suspension of work if unsafe, Trained and competent workers only, Personal protective equipment (hard hat, safety boots, harness), Anchors rated at 5,000 lbs per worker (or 3,600 lbs for engineered systems per OSHA); types include engineered (permanent, certified by professional engineer) or temporary (e.g., reusable beam clamps inspected daily)., Approvals by competent person (trained via OSHA 30-hour course, with documented qualifications); log approvals in JHA., Pre-use inspections and load testing; worker training on selection and use, with annual refreshers, Backup systems like dual anchors for redundancy, Leading edge: Install warning lines 6 ft back from edge or use safety monitors; protocols include no work within 15 ft without fall arrest, Fixed position: Full-body harnesses with shock-absorbing lanyards; limit task duration to reduce fatigue, Daily edge inspections; training on protocols with simulations, Weather monitoring to halt work in high winds, Dedicated rescue plan: Use aerial lifts or self-rescue devices (e.g., trauma straps); assign trained rescuers on-site, Response time goal: Under 5 minutes; integrate with site emergency plan, including 911 and first aid, Annual rescue drills; equip with trauma suspension relief straps, Post-fall debriefs to update plan, Secure with tethers or bags; no loose items over 5 lbs unsecured, Daily checks; tool inventories, Training on securing, Exclusion zones below, Install 3.5\" toe boards or nets; cover all edges, Inspect pre-shift; remove debris promptly, Worker training, Signage for zones", // 13 Working at Heights Controls
+    "Yes", "H=High Risk", "Oxygen deficiency or enrichment, Toxic gases (H2S, CO, LEL, VOCs), Engulfment or entrapment, Restricted entry/exit, Physical hazards (sharp edges, moving parts), Temperature extremes, Poor visibility or lighting, Flooding or liquid ingress, Structural collapse, Psychological stress (claustrophobia), Communication failure", "Permit-required confined space entry permit completed, Continuous atmospheric monitoring (4-gas meter), Dedicated attendant, entrant, and supervisor, Non-entry rescue system (tripod, winch), Mechanical ventilation or forced air, Lockout/tagout of all energy sources, Proper PPE (respirator, harness, gloves), Emergency rescue team on standby, Pre-entry briefing and sign-in, Lighting and communication equipment, Training and certification for all entrants, 4-gas meter with VOC", // 14-17 Confined Space
+    "Yes", "H=High Risk", "Arc flash/arc blast, Electric shock/electrocution, Fire from overload or short circuit, Burns from contact, Falls from shock reaction, Explosion in flammable atmosphere, Induced voltage in nearby conductors, Improper grounding, Damaged insulation or tools, Working near overhead/underground lines, Static discharge", "NFPA 70E-compliant PPE per arc-flash label, Verified de-energized state + LOTO, Insulated tools and gloves, Qualified person only for live work, Rubber insulating mats and blankets, Ground fault circuit interrupters (GFCI), Safe work distances from energized parts, Two-person rule for live work, Pre-job briefing and energized work permit, Barricades and signage, Testing for absence of voltage", // 18-21 Electrical Work
+    "Yes", "H=High Risk", "Cave-in or collapse, Struck-by falling material/spoil pile, Underground utility strike, Asphyxiation or toxic gas accumulation, Flooding or water accumulation, Falls into excavation, Heavy equipment rollover or contact, Soil instability (vibration, surcharge loads), Adjacent structure damage, Restricted access/egress, Hazardous atmosphere, Breaches leading to entries (e.g., into excavations)", "Sloping, benching, or shoring/trench box per soil type, Daily inspection by competent person, Utilities located (811 call) and potholed, Spoil pile and equipment ≥2 ft from edge, Access ladder within 25 ft of workers, Barricades and warning signs, Water removal pump if needed, Atmospheric testing if >4 ft deep, Hard hats and high-visibility vests, Spotter for equipment near edge, Excavation permit, Hard barricades for long-term (e.g., fences); soft for short (tape), Inspect daily; signage \"Do Not Enter\", Training on types/use (training), Remove when safe", // 22-25 Excavation / Trenching >4 ft
+    "Yes", "H=High Risk", "Fire or explosion, Burns from sparks or hot metal, Fume inhalation (metal fumes, gases), UV/IR eye damage (welder's flash), Noise exposure, Flying sparks/debris, Flammable vapor ignition, Confined space hazards if inside vessel, Electrical shock from welding equipment, Ergonomic strain, Chemical release from coatings, Unauthorized hot work sparking fires (e.g., without clearance), Lost permits leading to unmonitored areas post-shift, Non-posted permits causing non-compliance fines or overlooked risks, Workers unaware of hot zones leading to entry hazards, Combustibles near hot work igniting (e.g., fuel vapors in airport areas), Inadequate suppression delaying response, SFO air traffic interference from smoke, SFO/Turner non-compliance with internal audits, Post-work fires from embers", "Hot work permit issued + 30-60 min fire watch, 35-ft clear radius of combustibles, Charged fire extinguisher within 10 ft, Welding screens and proper PPE (leathers, shade 10+ lens), Ventilation or respirator for fumes, Fire blankets to shield combustibles, Grounding of welding equipment, Pre-job gas testing in confined areas, Hearing protection, Tool rest periods for ergonomics, Removal of hazardous coatings before work, Permits issued by competent person (e.g., safety officer trained in NFPA 51B); LWA for lockouts during hot work, At shift end: Submit permits to supervisor for review and archiving; digital scan/upload for records, Daily permit audits; training on process, Retention: 1 year minimum for audits, Post permits at work site entrance and main office; visible during all operations guidelines, Use weatherproof holders; daily checks for postings, Training on site-specific posting rules, Integrate with digital apps for notifications, Extinguishers (ABC type) within 10 ft; clear 35 ft radius of flammables per OSHA/NFPA, SFO reqs: Notify airport fire dept pre-work; install temporary fire barriers if needed., Annual fire training; stock suppression tools, SFO: Annual drills, restricted zones; Turner: Digital JSAs, fire watch for 60 min post-work, Coordinate with SFO for approvals; use low-smoke methods, Worker training on combined reqs, Post-work inspections for smoldering, Watch for 30-60 min post-work; equipped with extinguishers, NFPA training; document assignments, Rotate watchers; logs, Extended watch in windy conditions", // 26-29 Hot Work
+    "Yes", "H=High Risk", "Load drop, Crane tip-over, Struck-by swinging load, Two-blocking (hoist line), Overload or outrigger failure, Pinch/crush points, Wire rope or sling failure, Wind or weather effects, Ground instability, Communication failure, Unauthorized personnel in swing radius, Swing radius strikes (e.g., hitting structures), Unauthorized entry during travel", "Qualified rigger and signal person, Critical lift plan for >75% capacity, Tag lines on all loads, Barricaded swing radius and exclusion zone, Daily crane inspection and load chart review, Outriggers fully extended with pads, Wind speed monitoring and limits, Load weight verified and within chart, Anti-two-block device functional, Clear radio/hand signal communication, Spotter for blind spots, Mark full path with tape/cones; authorize only riggers/operators inside, Spotters enforce; pre-lift briefings, Training on zones", // 30-33 Crane / Rigging / Heavy Lifts
+    "Yes", // 34 Include Lockout/Tagout (LOTO)?
+    "H=High Risk", // 35 RAC for Lockout/Tagout (LOTO)
+    "Unexpected energization/start-up, Release of stored energy (pressure, springs), Multiple energy sources overlooked, Improper lock/tag removal, Electrical shock, Pinch/crush from moving parts, Chemical release, Thermal burns, Gravity-related hazards, Inadequate training, Group LOTO coordination failure, Pneumatic/hydraulic bursts (e.g., pressure release injuring workers), Gravity drops (e.g., falling parts)", // 36 LOTO Hazards
+    "Machine-specific written LOTO procedure, Zero-energy state verified (try-start), Personal locks and tags applied, Group lockbox for multi-craft, All energy sources identified and isolated, Authorized employee only, Shift change communication and verification, Annual inspection of procedures, Training for affected and authorized employees, Lock removal form for lost keys, Audit and documentation, Identify via machine audits; control: Bleed lines, block supports, Verify zero-energy with meters/try-out; group LOTO for multiples, Training on energy types (training), Audit locks/tags daily", // 37 LOTO Controls
+    chemicalEnabled ? "Yes" : "No", // 38 Include Chemical Handling / Transfer?
+    "H=High Risk", // 39 RAC for Chemical Handling / Transfer
+    chemicalEnabled ? "Chemical burns or exposure, Spill or release, Incompatible reaction, Flammable vapor ignition, Inhalation of toxic vapors, Skin absorption, Environmental release, Slip from spill, Over-pressurization, Static spark ignition, Labeling failure, Inhalation of fumes (e.g., welding dust causing respiratory issues), Improper PPE from unknown hazards, Environmental Contamination" : "", // 40 Chemical Handling / Transfer Hazards
+    chemicalEnabled ? "SDS reviewed and on site, Correct PPE per SDS (gloves, goggles, respirator), Secondary containment and spill kit, Bonding and grounding for flammables, Closed transfer systems or pumps, Proper labeling of all containers, Ventilation or fume hood, Emergency eyewash/shower nearby, Training on chemical hazards, No smoking or open flames, Spill response plan and drill, SDS located in on-site binder/app; review pre-task for PPE (e.g., respirators), Ventilation systems; spill kits for fuels, HazCom training annually (training), Label all materials, Spill kits with absorbents near equipment; response plan: Contain, notify, clean, Training: Hands-on for cleanup, annual, Inspections for leaks, Report to authorities if large, Spill kits on site" : "", // 41 Chemical Handling / Transfer Controls
+    "Yes", "H=High Risk", "Tip-over or rollover, Struck-by or crushing pedestrian, Load drop or shift, Collision with structures, Falling from cab, Carbon monoxide exposure, Blind spot accidents, Uneven ground or potholes, Overhead power lines, Unauthorized operator, Maintenance failure, Unstable lifts tipping over (e.g., uneven ground), Overcapacity causing structural failure, Struck-by incidents (e.g., SFO staff crossing paths), Blind spots causing collisions, Unauthorized entry into paths (e.g., leading to crushes), Overhead powerlines causing electrocution (e.g., contact at 10 ft), Potholes/slopes leading to rollovers, Intersections with poor visibility, Soft soil collapsing under weight, Miscommunication causing strikes (e.g., unclear signals), Exceeding capacity causing tips (e.g., unbalanced loads)", "Seatbelt worn + daily pre-use inspection, Horn, backup alarm, and lights functional, Spotter for blind spots or tight areas, No passengers or riding on forks, Maintain 10-ft clearance from overhead lines, Certified operator only, Load capacity not exceeded, Travel with forks low and tilted back, Slow speed in congested areas, Park with brakes set and forks down, Refueling in designated area, Pre-lift assessment: Calculate loads, check ground bearing; use load charts, Engineer approval for critical lifts; daily equipment inspections, Training on assessments, Halt if conditions change, Designated pedestrian walkways with signage; spotters for reversals, SFO-specific: Barriers near passenger areas; audible alarms, Training on plans; daily briefings (administrative/training), Physical separations like fences, Required for high-risk: Use Jersey barriers or A-frames with tape, Inspect daily; color-code for hazard levels, Worker training on setup, Remove post-use to avoid clutter, Route mapping: Maintain 10 ft from powerlines; fill potholes or reroute, Pre-travel inspections; speed limits on slopes, Training on hazard recognition (training), Spotters at intersections, ANSI/ASSE A10.47 training for spotters; methods: Two-way radios or standardized hand signals, Pre-shift comms tests; backup signals, Annual refreshers (training), Limit to trained personnel, Adhere to manufacturer thresholds (e.g., 80% max); weigh loads pre-handling, Use scales or indicators; document in logs, Operator training on limits (training), Reject overloads", // 42-45 Mobile Equipment Operation
+    "Yes", "H=High Risk", "Back, shoulder, or strain injury, Crush or pinch points, Dropped load on feet, Overexertion or fatigue, Slips/trips during carry, Awkward posture, Repetitive motion injury, Sharp edges or splinters, Unstable or shifting load, Poor grip (wet/slippery), Team lift miscommunication", "Team lift or mechanical aid for >50 lbs, Proper lifting technique (legs, not back), Anti-fatigue mats for prolonged standing, Stretch and flex before shift, Gloves for grip and cut protection, Clear pathways and good housekeeping, Load secured and balanced, Job rotation to reduce repetition, Training on ergonomics, Pre-task assessment of weight/path, Use of handles or lifting straps", // 46-49 Manual Material Handling / Heavy Lifting
+    "Yes", "H=High Risk", "Coordination failures leading to equipment conflicts (e.g., overlapping crane swings with other contractors)., Interference from SFO operations (e.g., noise/vibrations from aircraft affecting worker focus)., Nightwork visibility issues (e.g., shadows from airport lighting causing trips over uneven surfaces)., Fatigue from extended shifts in high-traffic areas (e.g., delayed response times in emergencies).", "Daily coordination meetings with all contractors and SFO reps to map work zones and schedules, Nightwork: High-visibility vests, reflective barriers, and LED lighting, minimum 5 foot-candles illumination per OSHA (engineering/PPE).:, Designated liaison for SFO communication, Pre-shift walkthroughs to identify changes, Fatigue management with mandatory breaks and shift rotations, Training on site-specific protocols for all workers", // 50-53 SFO Site Specific Work
+    "Yes", "H=High Risk", "Delayed evac due to airport traffic (e.g., blocked routes), Inadequate medical response", "Assembly points mapped; drills quarterly, Training for all; first aid kits stocked, 24/7 contact list, SFO reqs: Designated evac routes, on-site AEDs; coordinate with airport EMS", // 54-57 Emergency Response
+    "Yes", "H=High Risk", "High winds destabilizing equipment (e.g., cranes at 20 mph), Rain causing slips, Heat exhaustion, Dust inhalation (e.g., silica from grinding), Flying debris strikes (e.g., sparks hitting eyes), Housekeeping slips (e.g., clutter trips), Poor air quality affecting health", "Monitor weather; shutdown thresholds (e.g., no lifts over 25 mph), Provide shelters, hydration; reschedule tasks, Daily forecasts in briefings, PPE (like rain gear), Dust: Water suppression, HEPA vacuums, respirators, Flying debris: Screens/barriers, goggles; secure sources, Housekeeping: Daily cleanups, designated storage; \"clean as you go\" policy, Etc.: Fume extractors, waste segregation; air monitoring, Training on controls; audits weekly (engineering/PPE/training)", // 58-61 Weather / Environmental Controls
+    "Yes", "H=High Risk", "Unaddressed changes (e.g., new hazards from weather), Prolonged exposure over 85 dB (e.g., grinding noise)", "Stop work immediately; reassess JHA with team, Notify supervisor; document updates, Training on change recognition, Resume only after approval, Use ear plugs/muffs; rotate workers to limit exposure, Monitor with dosimeters; quieter tools if possible, Annual audiograms (PPE/training), Signage in zones", // 62-65 Conditions Change
+    "TEST JHA\nI have reviewed this JHA and understand the hazards and controls.", // 66 Additional Notes or Comments
+    "" // 67 Permit Files
+  ];
+
+  const mockEvent = {
+    values: mockValues,
+    range: SpreadsheetApp.getActiveSheet().getRange(999, 1),
+    source: SpreadsheetApp.getActiveSpreadsheet(),
+    namedValues: {}
+  };
+
+  const originalEmailSetting = SEND_EMAIL;
+  SEND_EMAIL = false;
+
+  Logger.log("Starting test generation...");
+  onFormSubmit(mockEvent);
+  Logger.log("Test finished.");
+
+  Logger.log("Check:");
+  Logger.log("- Docs: https://drive.google.com/drive/folders/" + DOCS_FOLDER_ID);
+  Logger.log("- PDFs: https://drive.google.com/drive/folders/" + PDF_FOLDER_ID);
+  Logger.log("- Sheet near row 999 or newest row");
+  Logger.log("- No email sent in test mode");
+
+  SEND_EMAIL = originalEmailSetting;
+}
