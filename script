@@ -115,15 +115,15 @@ function onFormSubmit(e) {
   const craneHaz = isCrane ? formatHazardsControls(dataMap['Crane / Rigging / Heavy Lifts Hazards']) : '';
   const craneCtrl = isCrane ? formatHazardsControls(dataMap['Crane / Rigging / Heavy Lifts Controls']) : '';
 
-  const isLOTO = (dataMap['Include Lockout/Tagout (LOTO)'] || '').toLowerCase() === 'yes';  // FIXED: removed trailing "?"
+  const isLOTO = (dataMap['Include Lockout / Tagout (LOTO)?'] || '').toLowerCase() === 'yes';
   const lotoTaskName = isLOTO ? 'Lockout/Tagout (LOTO)' : '';
-  const lotoRAC = isLOTO ? ((dataMap['RAC for Lockout/Tagout (LOTO)'] || '').charAt(0).toUpperCase() || '') : '';
+  const lotoRAC = isLOTO ? ((dataMap['RAC for Lockout / Tagout (LOTO)'] || '').charAt(0).toUpperCase() || '') : '';
   const lotoHaz = isLOTO ? formatHazardsControls(dataMap['LOTO Hazards']) : '';
   const lotoCtrl = isLOTO ? formatHazardsControls(dataMap['LOTO Controls']) : '';
 
   // Debug for LOTO
   Logger.log('LOTO isLOTO: ' + isLOTO);
-  Logger.log('LOTO include value: ' + (dataMap['Include Lockout/Tagout (LOTO)'] || 'MISSING'));
+  Logger.log('LOTO include value: ' + (dataMap['Include Lockout / Tagout (LOTO)?'] || 'MISSING'));
   Logger.log('LOTO raw hazards length: ' + (dataMap['LOTO Hazards'] || 'MISSING').length);
   Logger.log('Formatted lotoHaz length: ' + lotoHaz.length);
   Logger.log('Formatted lotoCtrl length: ' + lotoCtrl.length);
