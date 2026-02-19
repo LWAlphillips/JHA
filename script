@@ -410,7 +410,7 @@ function testGeneratePermit(chemicalEnabled = true) {
   };
 
   const originalEmailSetting = SEND_EMAIL;
-  SEND_EMAIL = false;
+  // SEND_EMAIL = false;
 
   Logger.log("Starting test generation...");
   onFormSubmit(mockEvent);
